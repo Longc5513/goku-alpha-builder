@@ -97,10 +97,14 @@ def _extract_items(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if isinstance(payload, dict):
-        for key in ("data", "result", "rows", "items"):
+        for key in ("data", "result", "rows", "items", "list"):
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
+            if isinstance(value, dict):
+                nested = _extract_items(value)
+                if nested:
+                    return nested
     return []
 
 
@@ -263,12 +267,17 @@ def summarize_news(news_hot: Any, featured: Any) -> pd.DataFrame:
     for source, payload in (("hot", news_hot), ("featured", featured)):
         items = _extract_items(payload)
         for item in items[:12]:
+            title = item.get("title") or item.get("name") or item.get("headline") or "Untitled"
+            summary = item.get("summary") or item.get("description") or item.get("content") or item.get("introduction") or ""
+            link = item.get("link") or item.get("url") or item.get("sourceLink") or item.get("source_link") or ""
+            published_at = item.get("releaseTime") or item.get("release_time") or item.get("publishedAt") or item.get("createdAt") or ""
             rows.append(
                 {
                     "source": source,
-                    "title": item.get("title") or item.get("name") or "Untitled",
-                    "summary": item.get("summary") or item.get("description") or "",
-                    "link": item.get("link") or item.get("url") or "",
+                    "title": title,
+                    "summary": summary,
+                    "link": link,
+                    "published_at": published_at,
                 }
             )
     return pd.DataFrame(rows)

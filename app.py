@@ -23,7 +23,6 @@ from alpha_builder.analytics import (
     as_dict,
     build_market_rows,
     build_price_frame,
-    build_price_frame_from_binance,
     build_strategy_draft,
     depth_stats,
     execution_plan_notional,
@@ -36,7 +35,7 @@ from alpha_builder.analytics import (
     summarize_news,
     trade_check_verdict,
 )
-from alpha_builder.clients import ApiError, BinanceClient, CoinGeckoClient, GroqClient, SoDexClient, SoSoValueClient
+from alpha_builder.clients import ApiError, GroqClient, SoDexClient, SoSoValueClient
 from alpha_builder.config import ensure_parent_dir, load_config
 from alpha_builder.storage import Storage
 
@@ -82,8 +81,6 @@ sodex = SoDexClient(
     account_id=config.sodex_account_id,
     wallet_address=config.sodex_wallet_address,
 )
-binance = BinanceClient()
-coingecko = CoinGeckoClient()
 groq = GroqClient(config.groq_api_key, config.groq_model)
 
 
@@ -161,13 +158,22 @@ def load_klines(symbol: str, interval: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=180, show_spinner=False)
 def load_news_bundle() -> dict[str, object]:
+    news_hot: object = {}
+    featured: object = {}
+    macro: object = {}
     try:
         news_hot = api_call("SoSoValue", "news_hot", lambda: soso.news_hot(page=1, page_size=10))
-        featured = api_call("SoSoValue", "news_featured", lambda: soso.news_featured(page_num=1, page_size=10))
-        macro = api_call("SoSoValue", "macro_events", lambda: soso.macro_events(datetime.utcnow().strftime("%Y-%m-%d")))
-        return {"news": summarize_news(news_hot, featured), "macro": macro}
     except Exception:
-        return {"news": pd.DataFrame(), "macro": {}}
+        news_hot = {}
+    try:
+        featured = api_call("SoSoValue", "news_featured", lambda: soso.news_featured(page_num=1, page_size=10))
+    except Exception:
+        featured = {}
+    try:
+        macro = api_call("SoSoValue", "macro_events", lambda: soso.macro_events(datetime.utcnow().strftime("%Y-%m-%d")))
+    except Exception:
+        macro = {}
+    return {"news": summarize_news(news_hot, featured), "macro": macro}
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -586,7 +592,7 @@ def render_news_agent(rows: list) -> None:
     bundle = load_news_bundle()
     news = bundle["news"]
     if isinstance(news, pd.DataFrame) and not news.empty:
-        st.dataframe(news.head(8), use_container_width=True, hide_index=True)
+        st.dataframe(news[["source", "title", "summary", "link", "published_at"]].head(8), use_container_width=True, hide_index=True)
     else:
         st.info("Live SoSoValue news feed unavailable right now.")
     if groq.enabled and isinstance(news, pd.DataFrame) and not news.empty:
@@ -630,7 +636,7 @@ def render_diagnostics(rows: list) -> None:
     for label, action in (
         ("SoDEX tickers", lambda: sodex.spot_tickers()),
         ("SoDEX symbols", lambda: sodex.spot_symbols()),
-        ("SoSoValue news", lambda: soso.news_hot()),
+        ("SoSoValue news", lambda: soso.news_hot(page=1, page_size=3)),
     ):
         started = datetime.utcnow()
         try:
@@ -680,7 +686,7 @@ def main() -> None:
             "Diagnostics",
         ],
     )
-    st.sidebar.caption("Rebuilt from scratch using the strongest ideas from prediction-market builders.")
+    st.sidebar.caption("Wave 3 builder desk: live SoDEX execution, live SoSoValue research, and auditable operator workflows.")
     render_api_visibility_tray()
     if menu == "Launch":
         render_overview(rows)
