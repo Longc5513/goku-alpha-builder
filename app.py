@@ -135,7 +135,10 @@ def load_market_bundle() -> dict[str, object]:
 
 @st.cache_data(ttl=90, show_spinner=False)
 def load_orderbook(symbol: str) -> dict[str, object]:
-    return api_call("SoDEX", f"orderbook:{symbol}", lambda: sodex.spot_orderbook(symbol, limit=20))
+    payload = api_call("SoDEX", f"orderbook:{symbol}", lambda: sodex.spot_orderbook(symbol, limit=20))
+    if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+        return payload["data"]
+    return payload
 
 
 @st.cache_data(ttl=90, show_spinner=False)
@@ -406,7 +409,18 @@ def render_execution_copilot(rows: list) -> None:
     side = st.selectbox("Side", ["BUY", "SELL"], index=0 if row["change_24h"] >= 0 else 1)
     symbol_meta = api_call("SoDEX", f"symbols:{symbol}", lambda: sodex.spot_symbols(symbol))
     meta_items = symbol_meta if isinstance(symbol_meta, list) else symbol_meta.get("data") or symbol_meta.get("result") or []
-    chosen = next((item for item in meta_items if str(item.get("symbol") or "") == symbol), {})
+    chosen = next(
+        (
+            item
+            for item in meta_items
+            if symbol in {
+                str(item.get("symbol") or "").strip(),
+                str(item.get("name") or "").strip(),
+                str(item.get("displayName") or "").strip(),
+            }
+        ),
+        {},
+    )
     symbol_id = chosen.get("symbolID") or chosen.get("symbolId") or chosen.get("id")
     account_id = config.sodex_account_id or st.text_input("SoDEX account ID", value=config.sodex_account_id)
     quantity = round(notional / max(float(row["price"]), 1.0), 6)

@@ -12,13 +12,18 @@ from .models import MarketRow, StrategyDraft
 
 
 TRACKED = {
-    "BTCUSDC": ("BTC", "Bitcoin"),
-    "ETHUSDC": ("ETH", "Ethereum"),
-    "SOLUSDC": ("SOL", "Solana"),
-    "LINKUSDC": ("LINK", "Chainlink"),
-    "SOSOUSDC": ("SOSO", "SoSoValue"),
-    "MAGI7ssiUSDC": ("MAGI7", "MAGI7.ssi"),
-    "USSIUSDC": ("USSI", "USSI"),
+    "vBTC_vUSDC": ("BTC", "Bitcoin"),
+    "vETH_vUSDC": ("ETH", "Ethereum"),
+    "vSOL_vUSDC": ("SOL", "Solana"),
+    "vLINK_vUSDC": ("LINK", "Chainlink"),
+    "WSOSO_vUSDC": ("SOSO", "SoSoValue"),
+    "vMAG7ssi_vUSDC": ("MAGI7", "MAG7.ssi"),
+    "vUSSI_vUSDC": ("USSI", "USSI Treasury Index"),
+    "vARB_vUSDC": ("ARB", "Arbitrum"),
+    "vPEPE_vUSDC": ("PEPE", "Pepe"),
+    "vAVAX_vUSDC": ("AVAX", "Avalanche"),
+    "vSHIB_vUSDC": ("SHIB", "Shiba Inu"),
+    "vHYPE_vUSDC": ("HYPE", "Hype"),
 }
 
 
@@ -40,12 +45,12 @@ def build_market_rows(spot_tickers: Any, book_tickers: Any) -> list[MarketRow]:
     rows: list[MarketRow] = []
     for item in _extract_items(spot_tickers):
         venue_symbol = str(item.get("symbol") or item.get("s") or "").strip()
-        symbol, name = TRACKED.get(venue_symbol, (venue_symbol.replace("USDC", ""), venue_symbol))
-        price = safe_float(item.get("price") or item.get("lastPrice") or item.get("close"))
-        change_24h = safe_float(item.get("priceChangePercent") or item.get("change24h") or item.get("change"))
+        symbol, name = TRACKED.get(venue_symbol, _fallback_symbol_name(venue_symbol, item))
+        price = safe_float(item.get("price") or item.get("lastPrice") or item.get("lastPx") or item.get("close"))
+        change_24h = safe_float(item.get("priceChangePercent") or item.get("change24h") or item.get("changePct") or item.get("change"))
         volume_24h = safe_float(item.get("quoteVolume") or item.get("volume"))
-        bid = safe_float(book_map.get(venue_symbol, {}).get("bidPrice"))
-        ask = safe_float(book_map.get(venue_symbol, {}).get("askPrice"))
+        bid = safe_float(book_map.get(venue_symbol, {}).get("bidPrice") or book_map.get(venue_symbol, {}).get("bidPx"))
+        ask = safe_float(book_map.get(venue_symbol, {}).get("askPrice") or book_map.get(venue_symbol, {}).get("askPx"))
         spread_bps = 0.0
         if bid and ask and price:
             spread_bps = ((ask - bid) / price) * 10000
@@ -67,6 +72,15 @@ def build_market_rows(spot_tickers: Any, book_tickers: Any) -> list[MarketRow]:
         )
     rows.sort(key=lambda row: row.volume_24h, reverse=True)
     return rows
+
+
+def _fallback_symbol_name(venue_symbol: str, item: dict[str, Any]) -> tuple[str, str]:
+    display_name = str(item.get("displayName") or "").strip()
+    if display_name and "/" in display_name:
+        base = display_name.split("/", 1)[0]
+        return base.replace("ssi", "").upper(), display_name
+    compact = venue_symbol.replace("_vUSDC", "").replace("_USDC", "").replace("v", "", 1)
+    return compact.upper(), venue_symbol
 
 
 def signal_for_row(change_24h: float, spread_bps: float, volume_24h: float) -> str:
@@ -173,6 +187,8 @@ def replay_strategy(frame: pd.DataFrame, mode: str) -> dict[str, float]:
 def depth_stats(orderbook: Any) -> dict[str, float]:
     if not isinstance(orderbook, dict):
         return {"bid_depth": 0.0, "ask_depth": 0.0, "spread_bps": 0.0, "imbalance_pct": 0.0}
+    if isinstance(orderbook.get("data"), dict):
+        orderbook = orderbook["data"]
     bids = orderbook.get("bids") or []
     asks = orderbook.get("asks") or []
     bid_depth = sum(safe_float(level[0]) * safe_float(level[1]) for level in bids[:8] if isinstance(level, (list, tuple)) and len(level) >= 2)
