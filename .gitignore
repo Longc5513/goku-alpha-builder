@@ -1,0 +1,15 @@
+.env
+.env.local
+.streamlit/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+data/
+dist/
+build/
+.vercel/
+node_modules/
+coverage/
+

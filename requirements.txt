@@ -1,0 +1,7 @@
+streamlit>=1.39
+pandas>=2.2
+requests>=2.32
+python-dotenv>=1.0
+eth-account>=0.13
+eth-utils>=5.0
+plotly>=5.24
