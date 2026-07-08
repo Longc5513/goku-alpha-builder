@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import uuid
+from typing import Any, Callable
 
 import pandas as pd
 import requests
@@ -82,17 +83,51 @@ coingecko = CoinGeckoClient()
 groq = GroqClient(config.groq_api_key, config.groq_model)
 
 
+def ensure_ui_state() -> None:
+    st.session_state.setdefault("api_tray", [])
+    st.session_state.setdefault("last_ai_draft", None)
+
+
+def remember_api_call(provider: str, endpoint: str, status: str, latency_ms: float, detail: str) -> None:
+    tray = st.session_state["api_tray"]
+    tray.insert(
+        0,
+        {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "provider": provider,
+            "endpoint": endpoint,
+            "status": status,
+            "latency_ms": round(latency_ms, 1),
+            "detail": detail[:140],
+        },
+    )
+    st.session_state["api_tray"] = tray[:18]
+
+
+def api_call(provider: str, endpoint: str, fn: Callable[[], Any]) -> Any:
+    started = datetime.utcnow()
+    try:
+        payload = fn()
+        latency = (datetime.utcnow() - started).total_seconds() * 1000
+        remember_api_call(provider, endpoint, "ok", latency, str(payload))
+        return payload
+    except Exception as exc:
+        latency = (datetime.utcnow() - started).total_seconds() * 1000
+        remember_api_call(provider, endpoint, "error", latency, str(exc))
+        raise
+
+
 @st.cache_data(ttl=45, show_spinner=False)
 def load_market_bundle() -> dict[str, object]:
     try:
-        tickers = sodex.spot_tickers()
-        book_tickers = sodex.spot_book_tickers()
+        tickers = api_call("SoDEX", "spot_tickers", lambda: sodex.spot_tickers())
+        book_tickers = api_call("SoDEX", "spot_book_tickers", lambda: sodex.spot_book_tickers())
         rows = build_market_rows(tickers, book_tickers)
         if rows:
             return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers, "provider": "sodex"}
     except Exception:
         pass
-    tickers = binance.tickers()
+    tickers = api_call("Binance", "tickers", lambda: binance.tickers())
     book_tickers = []
     rows = build_market_rows(tickers, book_tickers)
     return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers, "provider": "binance"}
@@ -100,30 +135,30 @@ def load_market_bundle() -> dict[str, object]:
 
 @st.cache_data(ttl=90, show_spinner=False)
 def load_orderbook(symbol: str) -> dict[str, object]:
-    return sodex.spot_orderbook(symbol, limit=20)
+    return api_call("SoDEX", f"orderbook:{symbol}", lambda: sodex.spot_orderbook(symbol, limit=20))
 
 
 @st.cache_data(ttl=90, show_spinner=False)
 def load_klines(symbol: str, interval: str) -> pd.DataFrame:
     try:
-        frame = build_price_frame(sodex.spot_klines(symbol, interval=interval, limit=180))
+        frame = build_price_frame(api_call("SoDEX", f"klines:{symbol}:{interval}", lambda: sodex.spot_klines(symbol, interval=interval, limit=180)))
         if not frame.empty:
             return frame
     except Exception:
         pass
-    return build_price_frame_from_binance(binance.klines(symbol, interval=interval, limit=180))
+    return build_price_frame_from_binance(api_call("Binance", f"klines:{symbol}:{interval}", lambda: binance.klines(symbol, interval=interval, limit=180)))
 
 
 @st.cache_data(ttl=180, show_spinner=False)
 def load_news_bundle() -> dict[str, object]:
     try:
-        news_hot = soso.news_hot()
-        featured = soso.news_featured()
-        macro = soso.macro_events(datetime.utcnow().strftime("%Y-%m-%d"))
+        news_hot = api_call("SoSoValue", "news_hot", lambda: soso.news_hot())
+        featured = api_call("SoSoValue", "news_featured", lambda: soso.news_featured())
+        macro = api_call("SoSoValue", "macro_events", lambda: soso.macro_events(datetime.utcnow().strftime("%Y-%m-%d")))
         return {"news": summarize_news(news_hot, featured), "macro": macro}
     except Exception:
         try:
-            markets = coingecko.coins_markets("bitcoin,ethereum,solana,chainlink")
+            markets = api_call("CoinGecko", "coins_markets", lambda: coingecko.coins_markets("bitcoin,ethereum,solana,chainlink"))
             fallback_news = pd.DataFrame(
                 [
                     {
@@ -165,6 +200,32 @@ def hero() -> None:
     )
 
 
+def render_api_visibility_tray() -> None:
+    with st.expander("API Visibility Tray", expanded=False):
+        tray = pd.DataFrame(st.session_state.get("api_tray", []))
+        if tray.empty:
+            st.caption("No API calls recorded yet in this session.")
+        else:
+            st.dataframe(tray, use_container_width=True, hide_index=True)
+
+
+def render_operator_queue() -> None:
+    st.subheader("Operator Queue")
+    drafts = pd.DataFrame(storage.list_drafts(40))
+    if drafts.empty:
+        st.info("No drafts staged yet. Use Strategy Rack, News Agent, or Execution Copilot to create operator-ready items.")
+        return
+    ai_drafts = drafts[drafts["module"].isin(["groq-execution", "news-agent", "strategy-rack", "execution-copilot"])]
+    if ai_drafts.empty:
+        st.info("No AI or staged execution drafts found yet.")
+        return
+    st.metric("Queued drafts", len(ai_drafts))
+    st.dataframe(ai_drafts[["id", "module", "symbol", "side", "mode", "thesis", "status", "created_at"]], use_container_width=True, hide_index=True)
+    latest = ai_drafts.iloc[0].to_dict()
+    st.caption("Latest queued draft payload")
+    st.json(latest["payload"])
+
+
 def render_overview(rows: list) -> None:
     st.subheader("Launch Rail")
     data = pd.DataFrame([row.__dict__ for row in rows])
@@ -177,6 +238,27 @@ def render_overview(rows: list) -> None:
     c2.metric("24H volume", f"${top['volume_24h'].sum():,.0f}")
     c3.metric("Best mover", top.sort_values("change_24h", ascending=False).iloc[0]["symbol"])
     c4.metric("Worst mover", top.sort_values("change_24h").iloc[0]["symbol"])
+    news_bundle = load_news_bundle()
+    news_frame = news_bundle["news"] if isinstance(news_bundle["news"], pd.DataFrame) else pd.DataFrame()
+    macro = news_bundle.get("macro")
+    thesis_col, regime_col = st.columns(2)
+    with thesis_col:
+        st.markdown("**Regime Verdict**")
+        positive = int((data["change_24h"] > 0).sum())
+        breadth = round((positive / max(len(data), 1)) * 100, 1)
+        leader = top.sort_values("change_24h", ascending=False).iloc[0]
+        regime = "risk-on" if breadth >= 55 else "mixed" if breadth >= 40 else "risk-off"
+        st.info(f"{regime.upper()} | breadth {breadth}% | leader {leader['symbol']} {leader['change_24h']:+.2f}%")
+    with regime_col:
+        st.markdown("**Research Trigger**")
+        if not news_frame.empty:
+            top_story = news_frame.iloc[0]
+            st.success(top_story["title"])
+            st.caption(top_story["summary"][:180] or "Live SoSoValue story available.")
+        else:
+            st.caption("Live research feed not available right now.")
+        if macro:
+            st.caption("Macro event payload detected from SoSoValue.")
     st.dataframe(
         top[["symbol", "price", "change_24h", "volume_24h", "signal", "confidence", "source"]],
         use_container_width=True,
@@ -284,7 +366,13 @@ def render_smart_money(rows: list) -> None:
     for wallet, trades in trades_by_wallet.items():
         score = simple_peer_score(trades)
         score_rows.append({"wallet": wallet, **score, "trades": len(trades)})
-    st.dataframe(pd.DataFrame(score_rows), use_container_width=True, hide_index=True)
+    score_frame = pd.DataFrame(score_rows)
+    st.dataframe(score_frame, use_container_width=True, hide_index=True)
+    if not score_frame.empty:
+        a, b, c = st.columns(3)
+        a.metric("Best timing", score_frame.sort_values("timing", ascending=False).iloc[0]["wallet"][:10] + "...")
+        b.metric("Best sizing", score_frame.sort_values("sizing", ascending=False).iloc[0]["wallet"][:10] + "...")
+        c.metric("Best discipline", score_frame.sort_values("discipline", ascending=False).iloc[0]["wallet"][:10] + "...")
 
 
 def render_lp_guard(rows: list) -> None:
@@ -316,29 +404,54 @@ def render_execution_copilot(rows: list) -> None:
     notional = st.number_input("Target notional (USDC)", min_value=50.0, value=float(execution_plan_notional(10000, float(row["confidence"]), 2500)))
     mode = st.selectbox("Route mode", ["LIMIT", "MARKET"])
     side = st.selectbox("Side", ["BUY", "SELL"], index=0 if row["change_24h"] >= 0 else 1)
-    symbol_meta = sodex.spot_symbols(symbol)
+    symbol_meta = api_call("SoDEX", f"symbols:{symbol}", lambda: sodex.spot_symbols(symbol))
     meta_items = symbol_meta if isinstance(symbol_meta, list) else symbol_meta.get("data") or symbol_meta.get("result") or []
     chosen = next((item for item in meta_items if str(item.get("symbol") or "") == symbol), {})
     symbol_id = chosen.get("symbolID") or chosen.get("symbolId") or chosen.get("id")
     account_id = config.sodex_account_id or st.text_input("SoDEX account ID", value=config.sodex_account_id)
     quantity = round(notional / max(float(row["price"]), 1.0), 6)
     st.write({"venue_symbol": symbol, "symbol_id": symbol_id, "quantity": quantity, "price": row["price"]})
+    fee_rate = None
+    if config.sodex_wallet_address and account_id:
+        try:
+            fee_rate = api_call("SoDEX", f"fee_rate:{symbol}", lambda: sodex.spot_fee_rate(config.sodex_wallet_address, symbol=symbol, account_id=account_id))
+        except Exception:
+            fee_rate = None
+    fee_preview = json.dumps(fee_rate)[:120] if fee_rate else "Unavailable"
+    risk_gate = {
+        "aid_blocked": str(account_id).strip() in ("", "0"),
+        "min_notional_ok": notional >= 50,
+        "max_notional_ok": notional <= 5000,
+        "fee_visible": fee_rate is not None,
+    }
+    gate_col1, gate_col2, gate_col3, gate_col4 = st.columns(4)
+    gate_col1.metric("Min notional", "PASS" if risk_gate["min_notional_ok"] else "BLOCK")
+    gate_col2.metric("Max notional", "PASS" if risk_gate["max_notional_ok"] else "BLOCK")
+    gate_col3.metric("Account ID", "BLOCK" if risk_gate["aid_blocked"] else "PASS")
+    gate_col4.metric("Fee aware", "PASS" if risk_gate["fee_visible"] else "WARN")
+    st.caption(f"Fee probe: {fee_preview}")
     if groq.enabled and st.button("Generate Groq execution draft"):
         try:
             bundle = load_news_bundle()
-            payload = groq.draft_execution(
-                {
-                    "symbol": row["symbol"],
-                    "venue_symbol": symbol,
-                    "price": row["price"],
-                    "change_24h": row["change_24h"],
-                    "volume_24h": row["volume_24h"],
-                    "signal": row["signal"],
-                    "confidence": row["confidence"],
-                    "news": bundle["news"].head(3).to_dict(orient="records") if isinstance(bundle["news"], pd.DataFrame) else [],
-                    "target_notional": notional,
-                }
+            payload = api_call(
+                "Groq",
+                f"draft_execution:{symbol}",
+                lambda: groq.draft_execution(
+                    {
+                        "symbol": row["symbol"],
+                        "venue_symbol": symbol,
+                        "price": row["price"],
+                        "change_24h": row["change_24h"],
+                        "volume_24h": row["volume_24h"],
+                        "signal": row["signal"],
+                        "confidence": row["confidence"],
+                        "news": bundle["news"].head(3).to_dict(orient="records") if isinstance(bundle["news"], pd.DataFrame) else [],
+                        "target_notional": notional,
+                    }
+                ),
             )
+            st.session_state["last_ai_draft"] = payload
+            storage.add_draft("groq-execution", row["symbol"], side, mode, payload.get("thesis", "Groq execution draft"), payload)
             storage.add_decision("groq", row["symbol"], "Generated Groq execution draft", payload)
             st.json(payload)
         except Exception as exc:
@@ -346,6 +459,12 @@ def render_execution_copilot(rows: list) -> None:
     if st.button("Prepare SoDEX order", type="primary"):
         if not account_id or not symbol_id:
             st.error("Missing SoDEX account ID or symbol ID.")
+        elif risk_gate["aid_blocked"]:
+            st.error("Risk gate blocked this action because accountID is 0 or empty.")
+        elif not risk_gate["min_notional_ok"]:
+            st.error("Risk gate blocked this action because notional is below 50 USDC.")
+        elif not risk_gate["max_notional_ok"]:
+            st.error("Risk gate blocked this action because notional is above 5,000 USDC.")
         else:
             cl_ord_id = f"goku-{uuid.uuid4().hex[:12]}"
             params = (
@@ -399,7 +518,8 @@ def render_news_agent(rows: list) -> None:
     if groq.enabled and isinstance(news, pd.DataFrame) and not news.empty:
         if st.button("Summarize news into action plan"):
             try:
-                summary = groq.draft_execution({"module": "news-agent", "stories": news.head(5).to_dict(orient="records")})
+                summary = api_call("Groq", "draft_execution:news", lambda: groq.draft_execution({"module": "news-agent", "stories": news.head(5).to_dict(orient="records")}))
+                storage.add_draft("news-agent", "MULTI", "BUY", "AI", summary.get("thesis", "News-to-execution AI draft"), summary)
                 storage.add_decision("news-agent", "MULTI", "Groq summarized live news", summary)
                 st.json(summary)
             except Exception as exc:
@@ -461,6 +581,7 @@ def render_diagnostics(rows: list) -> None:
 
 
 def main() -> None:
+    ensure_ui_state()
     hero()
     try:
         bundle = load_market_bundle()
@@ -478,12 +599,14 @@ def main() -> None:
             "LP Guard",
             "Execution Copilot",
             "News Agent",
+            "Operator Queue",
             "Portfolio Live",
             "Audit Trail",
             "Diagnostics",
         ],
     )
     st.sidebar.caption("Rebuilt from scratch using the strongest ideas from prediction-market builders.")
+    render_api_visibility_tray()
     if menu == "Launch":
         render_overview(rows)
     elif menu == "Strategy Rack":
@@ -498,6 +621,8 @@ def main() -> None:
         render_execution_copilot(rows)
     elif menu == "News Agent":
         render_news_agent(rows)
+    elif menu == "Operator Queue":
+        render_operator_queue()
     elif menu == "Portfolio Live":
         render_portfolio()
     elif menu == "Audit Trail":

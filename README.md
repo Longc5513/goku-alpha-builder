@@ -1,155 +1,156 @@
 # GOKU Alpha Builder
 
-GOKU Alpha Builder is a brand-new SoSoValue x SoDEX buildathon tool rebuilt from scratch around the strongest ideas found in public prediction-market repos.
+GOKU Alpha Builder is a focused buildathon workstation for `SoSoValue + SoDEX`.
 
-It is not a generic dashboard. It is a one-person trading workstation that combines:
+It is designed for a builder demo, not a passive dashboard. The product turns live market data, research context, peer behavior, and microstructure into staged execution drafts that an operator can actually review and route.
 
-- dataset discipline
-- replay validation
-- smart-money replication
-- LP quote protection
-- staged execution planning
+## What The Product Does
 
-## Product Thesis
+GOKU keeps only the modules that have a clear operator job:
 
-Strong builders do not stop at a pretty market page.
+- `Launch`
+  - live market overview
+  - regime verdict
+  - research trigger from SoSoValue news
+- `Strategy Rack`
+  - promotes live symbols into staged drafts
+  - supports trend capture, mean reversion, and vol breakout
+- `Replay Lab`
+  - validates recent tape before promotion
+  - shows return, Sharpe, max drawdown, and win rate
+- `Smart Money Mirror`
+  - reads real SoDEX wallet trade history
+  - ranks peer wallets by timing, sizing, and discipline
+  - derives consensus symbols and conviction
+- `LP Guard`
+  - inspects spread, bid depth, ask depth, and imbalance
+  - recommends maker-side behavior
+- `Execution Copilot`
+  - prepares real SoDEX order payloads
+  - supports live signing flow when keys are configured
+  - enforces a risk gate before submit
+- `News Agent`
+  - pulls SoSoValue news and macro context
+  - uses Groq to generate an execution-oriented draft
+- `Operator Queue`
+  - central queue of AI drafts and staged execution plans
+- `Portfolio Live`
+  - reads SoDEX balances, state, and orders for the configured wallet
+- `Audit Trail`
+  - stores decisions and staged drafts in SQLite
+- `Diagnostics`
+  - verifies API readiness and configuration health
 
-They build a loop:
+## Why This Build Is Useful
 
-1. collect and normalize live market data
-2. validate ideas with replay and structure
-3. learn from peer behavior
-4. protect execution quality
-5. turn everything into a concrete order draft
+Most hackathon trading tools stop at one of these layers:
 
-That is the exact loop this tool implements for SoSoValue + SoDEX.
+- pretty charts
+- static signals
+- isolated AI summaries
+- isolated order form demos
 
-## What Was Taken From The Referenced Repos
+GOKU connects the full loop:
 
-These repos were reviewed and distilled into product features:
+1. read live SoDEX market structure
+2. add SoSoValue news and macro context
+3. validate candidates through replay logic
+4. learn from peer wallet behavior
+5. enforce spread, size, and account checks
+6. produce an operator-ready execution draft
+
+That makes the demo much more credible in front of judges.
+
+## External Inspiration Distilled Into The Product
+
+The product direction was intentionally shaped by public trading and prediction-market repos:
 
 - [`SII-WANGZJ/Polymarket_data`](https://github.com/SII-WANGZJ/Polymarket_data)
-  - inspired the replay-ready, dataset-first mindset
+  - dataset-first thinking and replay discipline
 - [`evan-kolberg/prediction-market-backtesting`](https://github.com/evan-kolberg/prediction-market-backtesting)
-  - inspired the Replay Lab and validation-before-promotion workflow
+  - validate before deploy
 - [`ent0n29/polybot`](https://github.com/ent0n29/polybot)
-  - inspired Smart Money Mirror, peer consensus, and replication scoring
+  - peer behavior analysis and wallet mirroring
 - [`lihanyu81/polymarket_lp_tool`](https://github.com/lihanyu81/polymarket_lp_tool)
-  - inspired LP Guard and maker-discipline tooling
-- [`yangyuan-zhen/PolyWeather`](https://github.com/yangyuan-zhen/PolyWeather)
-  - inspired event-driven intelligence and specialized signal framing
+  - maker protection and repricing awareness
 - [`alsk1992/CloddsBot`](https://github.com/alsk1992/CloddsBot)
-  - inspired the multi-strategy rack design
-- [`pydantic/pydantic-ai`](https://github.com/pydantic/pydantic-ai)
-  - inspired typed draft payloads and agent-ready outputs
-- [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents)
-  - inspired research-to-action workflow design
-- [`pmxt-dev/pmxt`](https://github.com/pmxt-dev/pmxt)
-  - inspired unified market-tooling ergonomics
+  - multi-strategy rack structure
 - [`HarrierOnChain/Prediction-Markets-Trading-Bot-Toolkits`](https://github.com/HarrierOnChain/Prediction-Markets-Trading-Bot-Toolkits)
-  - inspired the execution-core mentality
+  - execution-first product mindset
+- [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents)
+  - research-to-action workflow design
+- [`pydantic/pydantic-ai`](https://github.com/pydantic/pydantic-ai)
+  - typed AI output thinking
+- [`pmxt-dev/pmxt`](https://github.com/pmxt-dev/pmxt)
+  - unified market-tool ergonomics
 - [`aarora4/Awesome-Prediction-Market-Tools`](https://github.com/aarora4/Awesome-Prediction-Market-Tools)
-  - used as a breadth benchmark for feature selection
+  - breadth benchmark for judging what is actually worth including
 
-## Product Modules
+## Data Providers
 
-### Launch
+Primary:
 
-Live SoDEX market tape for the tracked universe, with signal/confidence scoring and a launch-style overview.
+- `SoDEX`
+  - tickers
+  - book tickers
+  - orderbook
+  - klines
+  - balances
+  - orders
+  - trades
+  - fee rate
+  - signed order submission flow
+- `SoSoValue`
+  - hot news
+  - featured news
+  - macro events
+- `Groq`
+  - execution draft generation
+  - research-to-action summarization
 
-### Strategy Rack
+Fallback:
 
-Turns live symbols into staged drafts using:
+- `Binance`
+  - market tickers
+  - klines
+- `CoinGecko`
+  - market snapshot fallback when research feed is unavailable
 
-- trend capture
-- mean reversion
-- vol breakout
+## Operator Features That Matter In Demo
 
-### Replay Lab
+### API Visibility Tray
 
-Replay recent SoDEX klines with:
+Every session now records the most recent API calls with:
 
-- trend
-- mean reversion
-- vol breakout
+- provider
+- endpoint
+- status
+- latency
+- short payload/error preview
 
-Outputs:
+This helps judges see that the product is actually calling live providers instead of hiding everything behind static UI.
 
-- return
-- Sharpe
-- max drawdown
-- win rate
+### Risk Gate Before Live Submit
 
-### Smart Money Mirror
+Execution Copilot blocks weak order attempts using:
 
-Read real SoDEX wallet trade history and derive:
+- empty or zero `accountID`
+- notional below `50 USDC`
+- notional above `5,000 USDC`
+- fee-rate awareness status
 
-- wallet-level peer scores
-- symbol consensus
-- conviction ranking
+This is the kind of operator control that makes a builder tool feel serious.
 
-### LP Guard
+### Operator Queue
 
-Microstructure-focused tool for:
-
-- spread
-- bid/ask depth
-- imbalance
-- maker-side recommendation
-
-### Execution Copilot
-
-Builds a real SoDEX prepared order payload with:
-
-- account ID
-- symbol ID
-- limit or market mode
-- payload hash
-- EIP-712 signature when signing keys are configured
-
-### News Agent
-
-Pulls SoSoValue hot and featured news for research context.
-
-### Portfolio Live
-
-Reads SoDEX account state when wallet/account environment variables are configured.
-
-### Audit Trail
-
-Stores drafts and decisions locally in SQLite so the demo has memory and proof.
-
-### Diagnostics
-
-Checks readiness of:
-
-- SoDEX public API
-- SoSoValue API
-- signing configuration
-- wallet/account settings
-
-## Repo Structure
-
-```text
-alpha_builder/
-  analytics.py
-  clients.py
-  config.py
-  models.py
-  storage.py
-app.py
-scripts/
-  ship.ps1
-  ship.py
-requirements.txt
-.env.example
-```
+AI drafts and staged execution plans do not disappear after generation. They are stored and surfaced in a single queue so the operator can review what the system wants to do next.
 
 ## Environment Variables
 
 ```env
 SOSOVALUE_API_KEY=
 SOSOVALUE_BASE_URL=https://openapi.sosovalue.com/openapi/v1
+
 SODEX_API_KEY_NAME=
 SODEX_API_PRIVATE_KEY=
 SODEX_PUBLIC_KEY=
@@ -157,8 +158,10 @@ SODEX_ACCOUNT_ID=
 SODEX_WALLET_ADDRESS=
 SODEX_SPOT_BASE_URL=https://mainnet-gw.sodex.dev/api/v1/spot
 SODEX_PERPS_BASE_URL=https://mainnet-gw.sodex.dev/api/v1/perps
+
 GROQ_API_KEY=
 GROQ_MODEL=llama-3.3-70b-versatile
+
 GOKU_DB_PATH=./data/goku_alpha_builder.db
 ```
 
@@ -171,33 +174,47 @@ streamlit run app.py
 
 ## Deployment
 
-This repo is configured for container-style deployment.
+This repo includes deployment files for container-style hosting:
 
-Included files:
+- `Dockerfile`
+- `Dockerfile.vercel`
+- `Procfile`
+- `render.yaml`
 
-- [`Dockerfile`](./Dockerfile)
-- [`render.yaml`](./render.yaml)
-- [`Procfile`](./Procfile)
-
-That makes it straightforward to deploy on platforms such as Render or Railway.
-
-For local container-style parity:
+Example local container run:
 
 ```bash
 docker build -t goku-alpha-builder .
 docker run -p 8501:8501 --env-file .env goku-alpha-builder
 ```
 
-## Why This Build Is Better Focused
+## Repo Layout
 
-The old repo mixed many overlapping demo surfaces.
+```text
+alpha_builder/
+  analytics.py
+  clients.py
+  config.py
+  models.py
+  storage.py
+app.py
+requirements.txt
+.env.example
+Dockerfile
+Dockerfile.vercel
+```
 
-This rebuild keeps only the tools that are most likely to matter in judging:
+## Product Standard For Judges
 
-- is there real market data?
-- can it produce a meaningful draft?
-- does it validate signals before routing?
-- does it learn from peers?
-- does it protect execution quality?
+This repo is intentionally optimized around a buildathon question:
 
-That makes the product much cleaner, more useful, and easier to demo.
+`Can this product help a single operator move from research to execution with real market context and real exchange integration?`
+
+The current answer is yes:
+
+- real SoDEX reads
+- real SoSoValue research hooks
+- real Groq draft generation
+- real signed payload preparation
+- real audit memory
+- clean module scope without filler pages
