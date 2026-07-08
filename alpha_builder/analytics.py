@@ -114,6 +114,32 @@ def build_price_frame(klines: Any) -> pd.DataFrame:
     return frame
 
 
+def build_price_frame_from_binance(klines: Any) -> pd.DataFrame:
+    rows = []
+    if isinstance(klines, list):
+        for item in klines:
+            if not isinstance(item, (list, tuple)) or len(item) < 6:
+                continue
+            rows.append(
+                {
+                    "time": item[0],
+                    "open": safe_float(item[1]),
+                    "high": safe_float(item[2]),
+                    "low": safe_float(item[3]),
+                    "close": safe_float(item[4]),
+                    "volume": safe_float(item[5]),
+                }
+            )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    frame["ret"] = frame["close"].pct_change().fillna(0.0)
+    frame["rolling_mean"] = frame["close"].rolling(20).mean()
+    frame["rolling_std"] = frame["close"].rolling(20).std().fillna(0.0)
+    frame["volume_mean"] = frame["volume"].rolling(20).mean().fillna(0.0)
+    return frame
+
+
 def replay_strategy(frame: pd.DataFrame, mode: str) -> dict[str, float]:
     if frame.empty or len(frame) < 30:
         return {"return_pct": 0.0, "sharpe": 0.0, "max_drawdown_pct": 0.0, "win_rate_pct": 0.0}
@@ -257,4 +283,3 @@ def simple_peer_score(trades: list[dict[str, Any]]) -> dict[str, float]:
 
 def as_dict(draft: StrategyDraft) -> dict[str, Any]:
     return asdict(draft)
-

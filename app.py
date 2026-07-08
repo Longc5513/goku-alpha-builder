@@ -21,6 +21,7 @@ from alpha_builder.analytics import (
     as_dict,
     build_market_rows,
     build_price_frame,
+    build_price_frame_from_binance,
     build_strategy_draft,
     depth_stats,
     execution_plan_notional,
@@ -30,7 +31,7 @@ from alpha_builder.analytics import (
     smart_money_consensus,
     summarize_news,
 )
-from alpha_builder.clients import ApiError, SoDexClient, SoSoValueClient
+from alpha_builder.clients import ApiError, BinanceClient, CoinGeckoClient, GroqClient, SoDexClient, SoSoValueClient
 from alpha_builder.config import ensure_parent_dir, load_config
 from alpha_builder.storage import Storage
 
@@ -76,14 +77,25 @@ sodex = SoDexClient(
     account_id=config.sodex_account_id,
     wallet_address=config.sodex_wallet_address,
 )
+binance = BinanceClient()
+coingecko = CoinGeckoClient()
+groq = GroqClient(config.groq_api_key, config.groq_model)
 
 
 @st.cache_data(ttl=45, show_spinner=False)
 def load_market_bundle() -> dict[str, object]:
-    tickers = sodex.spot_tickers()
-    book_tickers = sodex.spot_book_tickers()
+    try:
+        tickers = sodex.spot_tickers()
+        book_tickers = sodex.spot_book_tickers()
+        rows = build_market_rows(tickers, book_tickers)
+        if rows:
+            return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers, "provider": "sodex"}
+    except Exception:
+        pass
+    tickers = binance.tickers()
+    book_tickers = []
     rows = build_market_rows(tickers, book_tickers)
-    return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers}
+    return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers, "provider": "binance"}
 
 
 @st.cache_data(ttl=90, show_spinner=False)
@@ -93,7 +105,13 @@ def load_orderbook(symbol: str) -> dict[str, object]:
 
 @st.cache_data(ttl=90, show_spinner=False)
 def load_klines(symbol: str, interval: str) -> pd.DataFrame:
-    return build_price_frame(sodex.spot_klines(symbol, interval=interval, limit=180))
+    try:
+        frame = build_price_frame(sodex.spot_klines(symbol, interval=interval, limit=180))
+        if not frame.empty:
+            return frame
+    except Exception:
+        pass
+    return build_price_frame_from_binance(binance.klines(symbol, interval=interval, limit=180))
 
 
 @st.cache_data(ttl=180, show_spinner=False)
@@ -104,7 +122,22 @@ def load_news_bundle() -> dict[str, object]:
         macro = soso.macro_events(datetime.utcnow().strftime("%Y-%m-%d"))
         return {"news": summarize_news(news_hot, featured), "macro": macro}
     except Exception:
-        return {"news": pd.DataFrame(), "macro": {}}
+        try:
+            markets = coingecko.coins_markets("bitcoin,ethereum,solana,chainlink")
+            fallback_news = pd.DataFrame(
+                [
+                    {
+                        "source": "coingecko-fallback",
+                        "title": f"{item.get('name')} market snapshot",
+                        "summary": f"Price {item.get('current_price')} | 24H {item.get('price_change_percentage_24h')}",
+                        "link": item.get("id", ""),
+                    }
+                    for item in markets
+                ]
+            )
+            return {"news": fallback_news, "macro": {}}
+        except Exception:
+            return {"news": pd.DataFrame(), "macro": {}}
 
 
 def log_and_store(module: str, symbol: str, summary: str, payload: dict[str, object]) -> None:
@@ -290,6 +323,26 @@ def render_execution_copilot(rows: list) -> None:
     account_id = config.sodex_account_id or st.text_input("SoDEX account ID", value=config.sodex_account_id)
     quantity = round(notional / max(float(row["price"]), 1.0), 6)
     st.write({"venue_symbol": symbol, "symbol_id": symbol_id, "quantity": quantity, "price": row["price"]})
+    if groq.enabled and st.button("Generate Groq execution draft"):
+        try:
+            bundle = load_news_bundle()
+            payload = groq.draft_execution(
+                {
+                    "symbol": row["symbol"],
+                    "venue_symbol": symbol,
+                    "price": row["price"],
+                    "change_24h": row["change_24h"],
+                    "volume_24h": row["volume_24h"],
+                    "signal": row["signal"],
+                    "confidence": row["confidence"],
+                    "news": bundle["news"].head(3).to_dict(orient="records") if isinstance(bundle["news"], pd.DataFrame) else [],
+                    "target_notional": notional,
+                }
+            )
+            storage.add_decision("groq", row["symbol"], "Generated Groq execution draft", payload)
+            st.json(payload)
+        except Exception as exc:
+            st.error(f"Groq draft failed: {exc}")
     if st.button("Prepare SoDEX order", type="primary"):
         if not account_id or not symbol_id:
             st.error("Missing SoDEX account ID or symbol ID.")
@@ -343,6 +396,14 @@ def render_news_agent(rows: list) -> None:
         st.dataframe(news.head(8), use_container_width=True, hide_index=True)
     else:
         st.info("News feed unavailable or API key missing.")
+    if groq.enabled and isinstance(news, pd.DataFrame) and not news.empty:
+        if st.button("Summarize news into action plan"):
+            try:
+                summary = groq.draft_execution({"module": "news-agent", "stories": news.head(5).to_dict(orient="records")})
+                storage.add_decision("news-agent", "MULTI", "Groq summarized live news", summary)
+                st.json(summary)
+            except Exception as exc:
+                st.error(f"Groq news summary failed: {exc}")
 
 
 def render_portfolio() -> None:
@@ -391,6 +452,7 @@ def render_diagnostics(rows: list) -> None:
             "has_sosovalue_key": config.has_sosovalue,
             "has_sodex_signing": config.has_sodex_signing,
             "has_groq_key": config.has_groq,
+            "groq_model": config.groq_model,
             "wallet_address": config.sodex_wallet_address,
             "account_id": config.sodex_account_id,
             "rows_loaded": len(rows),

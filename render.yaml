@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: goku-alpha-builder
+    runtime: docker
+    plan: free
+    autoDeploy: true

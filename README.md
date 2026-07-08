@@ -169,6 +169,25 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Deployment
+
+This repo is configured for container-style deployment.
+
+Included files:
+
+- [`Dockerfile`](./Dockerfile)
+- [`render.yaml`](./render.yaml)
+- [`Procfile`](./Procfile)
+
+That makes it straightforward to deploy on platforms such as Render or Railway.
+
+For local container-style parity:
+
+```bash
+docker build -t goku-alpha-builder .
+docker run -p 8501:8501 --env-file .env goku-alpha-builder
+```
+
 ## Why This Build Is Better Focused
 
 The old repo mixed many overlapping demo surfaces.
@@ -182,4 +201,3 @@ This rebuild keeps only the tools that are most likely to matter in judging:
 - does it protect execution quality?
 
 That makes the product much cleaner, more useful, and easier to demo.
-

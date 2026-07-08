@@ -131,6 +131,96 @@ class SoSoValueClient:
         return self.get("/macro/events", {"date": date} if date else None)
 
 
+class BinanceClient:
+    def __init__(self, base_url: str = "https://api.binance.com/api/v3", timeout: int = 20) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        response = self.session.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
+        if not response.ok:
+            raise ApiError(f"Binance {response.status_code}: {response.text[:300]}")
+        return response.json()
+
+    def tickers(self, symbol: str | None = None) -> Any:
+        return self._get("/ticker/24hr", {"symbol": symbol} if symbol else None)
+
+    def klines(self, symbol: str, interval: str = "1h", limit: int = 180) -> Any:
+        return self._get("/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+
+
+class CoinGeckoClient:
+    def __init__(self, base_url: str = "https://api.coingecko.com/api/v3", timeout: int = 20) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        response = self.session.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
+        if not response.ok:
+            raise ApiError(f"CoinGecko {response.status_code}: {response.text[:300]}")
+        return response.json()
+
+    def coins_markets(self, ids: str, currency: str = "usd") -> Any:
+        return self._get(
+            "/coins/markets",
+            {
+                "vs_currency": currency,
+                "ids": ids,
+                "price_change_percentage": "24h",
+                "per_page": 50,
+                "page": 1,
+            },
+        )
+
+
+class GroqClient:
+    def __init__(self, api_key: str = "", model: str = "llama-3.3-70b-versatile", timeout: int = 30) -> None:
+        self.api_key = api_key.strip()
+        self.model = model
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.api_key)
+
+    def draft_execution(self, context: dict[str, Any]) -> dict[str, Any]:
+        if not self.enabled:
+            raise ApiError("Groq API key is missing")
+        payload = {
+            "model": self.model,
+            "temperature": 0.2,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a trading execution copilot. "
+                        "Return concise JSON with keys summary, side, mode, thesis, risk, and steps. "
+                        "Do not wrap JSON in markdown."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(context, ensure_ascii=False),
+                },
+            ],
+            "response_format": {"type": "json_object"},
+        }
+        response = self.session.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            raise ApiError(f"Groq {response.status_code}: {response.text[:300]}")
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        return json.loads(content)
+
+
 class SoDexClient:
     def __init__(
         self,
@@ -330,4 +420,3 @@ class SoDexClient:
         if not response.ok:
             raise ApiError(f"SoDEX {response.status_code}: {response.text[:500]}")
         return response.json()
-
