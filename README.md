@@ -1,149 +1,101 @@
-# GOKU Alpha Builder
+# GOKU SoDEX Operator
 
-GOKU Alpha Builder is a focused buildathon workstation for `SoSoValue + SoDEX`.
+GOKU SoDEX Operator is a live trading workstation built for `SoDEX + SoSoValue`.
 
-It is designed for a builder demo, not a passive dashboard. The product turns live market data, research context, peer behavior, and microstructure into staged execution drafts that an operator can actually review and route.
+This repo is no longer positioned as a demo shell. It is a real operator surface that:
 
-## What The Product Does
+- reads live SoDEX spot markets
+- inspects live SoDEX orderbook depth
+- builds smart-money context from the SoDEX leaderboard and perps positions
+- pulls live SoSoValue research
+- prepares signed SoDEX order payloads for execution review
 
-GOKU keeps only the modules that have a clear operator job:
+## Live Product Scope
+
+The current app keeps only modules that map to real exchange or research work:
 
 - `Launch`
-  - live market overview
-  - regime verdict
-  - research trigger from SoSoValue news
+  - live SoDEX market rows
+  - regime verdict from current breadth
+  - live research trigger from SoSoValue
 - `Strategy Rack`
-  - promotes live symbols into staged drafts
-  - supports trend capture, mean reversion, and vol breakout
+  - promotes live SoDEX rows into staged operator drafts
 - `Replay Lab`
-  - validates recent tape before promotion
-  - shows return, Sharpe, max drawdown, and win rate
+  - replays live SoDEX spot klines only
 - `Smart Money Mirror`
-  - reads real SoDEX wallet trade history
-  - ranks peer wallets by timing, sizing, and discipline
-  - derives consensus symbols and conviction
+  - combines manual peer-wallet tracking with qualified SoDEX leaderboard consensus
 - `LP Guard`
-  - inspects spread, bid depth, ask depth, and imbalance
-  - recommends maker-side behavior
+  - reads real spread, depth, and imbalance from the SoDEX orderbook
 - `Execution Copilot`
-  - prepares real SoDEX order payloads
-  - supports live signing flow when keys are configured
-  - enforces a risk gate before submit
-- `News Agent`
-  - pulls SoSoValue news and macro context
-  - uses Groq to generate an execution-oriented draft
-- `Operator Queue`
-  - central queue of AI drafts and staged execution plans
+  - checks symbol metadata
+  - probes fee-rate
+  - runs a trade verdict
+  - prepares a signed SoDEX payload
+- `News Intelligence`
+  - reads live SoSoValue hot and featured news
+  - reads live currency-filtered SoSoValue research by symbol
 - `Portfolio Live`
-  - reads SoDEX balances, state, and orders for the configured wallet
+  - reads SoDEX balances, state, and open orders
+- `Operator Queue`
+  - stores staged drafts generated during the session
 - `Audit Trail`
-  - stores decisions and staged drafts in SQLite
+  - records decisions and payloads in SQLite
 - `Diagnostics`
-  - verifies API readiness and configuration health
+  - verifies live API readiness and configuration health
 
-## Why This Build Is Useful
+## What Is Real
 
-Most hackathon trading tools stop at one of these layers:
+### SoDEX
 
-- pretty charts
-- static signals
-- isolated AI summaries
-- isolated order form demos
+- spot tickers
+- spot book tickers
+- spot klines
+- spot orderbook
+- spot symbol metadata
+- spot balances
+- spot state
+- spot open orders
+- spot fee-rate
+- SoDEX leaderboard
+- SoDEX perps open positions for smart-money consensus
+- signed spot payload preparation
 
-GOKU connects the full loop:
+### SoSoValue
 
-1. read live SoDEX market structure
-2. add SoSoValue news and macro context
-3. validate candidates through replay logic
-4. learn from peer wallet behavior
-5. enforce spread, size, and account checks
-6. produce an operator-ready execution draft
+- hot news
+- featured news
+- featured news by currency
+- macro events
 
-That makes the demo much more credible in front of judges.
+### Groq
 
-## External Inspiration Distilled Into The Product
+- execution-draft generation
+- research summarization
 
-The product direction was intentionally shaped by public trading and prediction-market repos:
+## What The Tool Actually Helps With
 
-- [`SII-WANGZJ/Polymarket_data`](https://github.com/SII-WANGZJ/Polymarket_data)
-  - dataset-first thinking and replay discipline
-- [`evan-kolberg/prediction-market-backtesting`](https://github.com/evan-kolberg/prediction-market-backtesting)
-  - validate before deploy
-- [`ent0n29/polybot`](https://github.com/ent0n29/polybot)
-  - peer behavior analysis and wallet mirroring
-- [`lihanyu81/polymarket_lp_tool`](https://github.com/lihanyu81/polymarket_lp_tool)
-  - maker protection and repricing awareness
-- [`alsk1992/CloddsBot`](https://github.com/alsk1992/CloddsBot)
-  - multi-strategy rack structure
-- [`HarrierOnChain/Prediction-Markets-Trading-Bot-Toolkits`](https://github.com/HarrierOnChain/Prediction-Markets-Trading-Bot-Toolkits)
-  - execution-first product mindset
-- [`TauricResearch/TradingAgents`](https://github.com/TauricResearch/TradingAgents)
-  - research-to-action workflow design
-- [`pydantic/pydantic-ai`](https://github.com/pydantic/pydantic-ai)
-  - typed AI output thinking
-- [`pmxt-dev/pmxt`](https://github.com/pmxt-dev/pmxt)
-  - unified market-tool ergonomics
-- [`aarora4/Awesome-Prediction-Market-Tools`](https://github.com/aarora4/Awesome-Prediction-Market-Tools)
-  - breadth benchmark for judging what is actually worth including
+This product is built around one practical workflow:
 
-## Data Providers
+1. monitor live SoDEX spot structure
+2. inspect spread and depth before acting
+3. compare the trade to qualified smart-money bias
+4. read symbol-specific SoSoValue research
+5. run a risk gate
+6. prepare the exact SoDEX payload before submit
 
-Primary:
+That is the core operator loop.
 
-- `SoDEX`
-  - tickers
-  - book tickers
-  - orderbook
-  - klines
-  - balances
-  - orders
-  - trades
-  - fee rate
-  - signed order submission flow
-- `SoSoValue`
-  - hot news
-  - featured news
-  - macro events
-- `Groq`
-  - execution draft generation
-  - research-to-action summarization
+## Important Constraint
 
-Fallback:
+Live account surfaces depend on the configured SoDEX wallet actually having an active account.
 
-- `Binance`
-  - market tickers
-  - klines
-- `CoinGecko`
-  - market snapshot fallback when research feed is unavailable
+If the wallet returns:
 
-## Operator Features That Matter In Demo
+- `aid = 0`
+- empty balances
+- empty orders
 
-### API Visibility Tray
-
-Every session now records the most recent API calls with:
-
-- provider
-- endpoint
-- status
-- latency
-- short payload/error preview
-
-This helps judges see that the product is actually calling live providers instead of hiding everything behind static UI.
-
-### Risk Gate Before Live Submit
-
-Execution Copilot blocks weak order attempts using:
-
-- empty or zero `accountID`
-- notional below `50 USDC`
-- notional above `5,000 USDC`
-- fee-rate awareness status
-
-This is the kind of operator control that makes a builder tool feel serious.
-
-### Operator Queue
-
-AI drafts and staged execution plans do not disappear after generation. They are stored and surfaced in a single queue so the operator can review what the system wants to do next.
+then market, depth, and leaderboard functions still work, but personal portfolio and live execution history will remain sparse until the SoDEX account is active.
 
 ## Environment Variables
 
@@ -174,18 +126,18 @@ streamlit run app.py
 
 ## Deployment
 
-This repo includes deployment files for container-style hosting:
+This repo is configured for container deployment:
 
 - `Dockerfile`
 - `Dockerfile.vercel`
 - `Procfile`
 - `render.yaml`
 
-Example local container run:
+Example:
 
 ```bash
-docker build -t goku-alpha-builder .
-docker run -p 8501:8501 --env-file .env goku-alpha-builder
+docker build -t goku-sodex-operator .
+docker run -p 8501:8501 --env-file .env goku-sodex-operator
 ```
 
 ## Repo Layout
@@ -204,17 +156,8 @@ Dockerfile
 Dockerfile.vercel
 ```
 
-## Product Standard For Judges
+## Build Standard
 
-This repo is intentionally optimized around a buildathon question:
+The standard for this repo is simple:
 
-`Can this product help a single operator move from research to execution with real market context and real exchange integration?`
-
-The current answer is yes:
-
-- real SoDEX reads
-- real SoSoValue research hooks
-- real Groq draft generation
-- real signed payload preparation
-- real audit memory
-- clean module scope without filler pages
+`If a feature is shown in the UI, it should be backed by a real provider call, real exchange logic, or a real operator workflow.`

@@ -299,3 +299,117 @@ def simple_peer_score(trades: list[dict[str, Any]]) -> dict[str, float]:
 
 def as_dict(draft: StrategyDraft) -> dict[str, Any]:
     return asdict(draft)
+
+
+def normalize_perps_positions(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        payload = payload.get("data") if isinstance(payload.get("data"), list) else payload.get("positions") or payload.get("data") or []
+    rows: list[dict[str, Any]] = []
+    for item in payload or []:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip()
+        size_raw = safe_float(item.get("size"), 0.0)
+        if not symbol or size_raw == 0:
+            continue
+        side_raw = str(item.get("positionSide") or item.get("side") or "").lower()
+        if "long" in side_raw:
+            side = "long"
+        elif "short" in side_raw:
+            side = "short"
+        else:
+            side = "long" if size_raw > 0 else "short"
+        entry = safe_float(item.get("avgEntryPrice") or item.get("entry_price"), 0.0)
+        size = abs(size_raw)
+        rows.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "size": size,
+                "entry_price": entry,
+                "notional": size * entry if entry else 0.0,
+            }
+        )
+    return rows
+
+
+def build_leaderboard_consensus(leaderboard: Any, positions_by_wallet: dict[str, Any], n_top: int = 20) -> pd.DataFrame:
+    items = leaderboard.get("items") if isinstance(leaderboard, dict) else []
+    items = [item for item in items or [] if safe_float(item.get("pnl_usd"), 0.0) > 0]
+    items.sort(key=lambda item: safe_float(item.get("pnl_usd"), 0.0), reverse=True)
+    items = items[:n_top]
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        wallet = str(item.get("wallet_address") or "").strip()
+        if not wallet:
+            continue
+        pnl_usd = safe_float(item.get("pnl_usd"), 0.0)
+        volume_usd = safe_float(item.get("volume_usd"), 0.0)
+        for pos in normalize_perps_positions(positions_by_wallet.get(wallet)):
+            rows.append(
+                {
+                    "wallet": wallet,
+                    "symbol": pos["symbol"],
+                    "side": pos["side"],
+                    "notional": pos["notional"],
+                    "pnl_usd": pnl_usd,
+                    "volume_usd": volume_usd,
+                }
+            )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    grouped = frame.groupby(["symbol", "side"], as_index=False).agg(
+        traders=("wallet", "nunique"),
+        total_notional=("notional", "sum"),
+        pnl_backing=("pnl_usd", "sum"),
+        volume_backing=("volume_usd", "sum"),
+    )
+    pivot = grouped.pivot(index="symbol", columns="side")
+    pivot.columns = [f"{left}_{right}" for left, right in pivot.columns]
+    pivot = pivot.fillna(0.0).reset_index()
+    pivot["long_traders"] = pivot.get("traders_long", 0).astype(int)
+    pivot["short_traders"] = pivot.get("traders_short", 0).astype(int)
+    pivot["long_notional"] = pivot.get("total_notional_long", 0.0)
+    pivot["short_notional"] = pivot.get("total_notional_short", 0.0)
+    pivot["bias"] = pivot.apply(lambda row: "LONG" if row["long_notional"] >= row["short_notional"] else "SHORT", axis=1)
+    pivot["dominance_ratio"] = pivot.apply(
+        lambda row: round(max(row["long_notional"], row["short_notional"]) / max(min(row["long_notional"], row["short_notional"]), 1.0), 2),
+        axis=1,
+    )
+    return pivot.sort_values(["dominance_ratio", "long_notional", "short_notional"], ascending=[False, False, False]).reset_index(drop=True)
+
+
+def trade_check_verdict(row: MarketRow, side: str, consensus_row: dict[str, Any] | None) -> dict[str, Any]:
+    side = side.upper()
+    momentum_bias = "BUY" if row.change_24h >= 0 else "SELL"
+    momentum_score = 1 if side == momentum_bias else -1
+    confidence_score = 1 if row.confidence >= 58 else 0
+    consensus_score = 0
+    consensus_label = "no smart-money signal"
+    if consensus_row:
+        bias = str(consensus_row.get("bias") or "").upper()
+        symbol_side = "BUY" if bias == "LONG" else "SELL" if bias == "SHORT" else ""
+        if symbol_side:
+            consensus_score = 1 if side == symbol_side else -1
+            consensus_label = f"{bias} | {consensus_row.get('dominance_ratio', 0)}x dominance"
+    total = momentum_score + confidence_score + consensus_score
+    if total >= 2:
+        verdict = "GREEN LIGHT"
+        color = "good"
+    elif total == 1:
+        verdict = "TACTICAL"
+        color = "normal"
+    elif total == 0:
+        verdict = "MIXED"
+        color = "warning"
+    else:
+        verdict = "SKIP"
+        color = "error"
+    return {
+        "verdict": verdict,
+        "color": color,
+        "momentum_bias": momentum_bias,
+        "consensus_label": consensus_label,
+        "score": total,
+    }

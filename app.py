@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 import uuid
 from typing import Any, Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import requests
@@ -26,11 +27,14 @@ from alpha_builder.analytics import (
     build_strategy_draft,
     depth_stats,
     execution_plan_notional,
+    build_leaderboard_consensus,
+    normalize_perps_positions,
     replay_strategy,
     score_repos_summary,
     simple_peer_score,
     smart_money_consensus,
     summarize_news,
+    trade_check_verdict,
 )
 from alpha_builder.clients import ApiError, BinanceClient, CoinGeckoClient, GroqClient, SoDexClient, SoSoValueClient
 from alpha_builder.config import ensure_parent_dir, load_config
@@ -89,7 +93,10 @@ def ensure_ui_state() -> None:
 
 
 def remember_api_call(provider: str, endpoint: str, status: str, latency_ms: float, detail: str) -> None:
-    tray = st.session_state["api_tray"]
+    try:
+        tray = st.session_state.get("api_tray", [])
+    except Exception:
+        return
     tray.insert(
         0,
         {
@@ -101,7 +108,10 @@ def remember_api_call(provider: str, endpoint: str, status: str, latency_ms: flo
             "detail": detail[:140],
         },
     )
-    st.session_state["api_tray"] = tray[:18]
+    try:
+        st.session_state["api_tray"] = tray[:18]
+    except Exception:
+        return
 
 
 def api_call(provider: str, endpoint: str, fn: Callable[[], Any]) -> Any:
@@ -126,11 +136,8 @@ def load_market_bundle() -> dict[str, object]:
         if rows:
             return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers, "provider": "sodex"}
     except Exception:
-        pass
-    tickers = api_call("Binance", "tickers", lambda: binance.tickers())
-    book_tickers = []
-    rows = build_market_rows(tickers, book_tickers)
-    return {"rows": rows, "tickers": tickers, "book_tickers": book_tickers, "provider": "binance"}
+        return {"rows": [], "tickers": [], "book_tickers": [], "provider": "sodex-error"}
+    return {"rows": [], "tickers": [], "book_tickers": [], "provider": "sodex-empty"}
 
 
 @st.cache_data(ttl=90, show_spinner=False)
@@ -148,34 +155,48 @@ def load_klines(symbol: str, interval: str) -> pd.DataFrame:
         if not frame.empty:
             return frame
     except Exception:
-        pass
-    return build_price_frame_from_binance(api_call("Binance", f"klines:{symbol}:{interval}", lambda: binance.klines(symbol, interval=interval, limit=180)))
+        return pd.DataFrame()
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=180, show_spinner=False)
 def load_news_bundle() -> dict[str, object]:
     try:
-        news_hot = api_call("SoSoValue", "news_hot", lambda: soso.news_hot())
-        featured = api_call("SoSoValue", "news_featured", lambda: soso.news_featured())
+        news_hot = api_call("SoSoValue", "news_hot", lambda: soso.news_hot(page=1, page_size=10))
+        featured = api_call("SoSoValue", "news_featured", lambda: soso.news_featured(page_num=1, page_size=10))
         macro = api_call("SoSoValue", "macro_events", lambda: soso.macro_events(datetime.utcnow().strftime("%Y-%m-%d")))
         return {"news": summarize_news(news_hot, featured), "macro": macro}
     except Exception:
-        try:
-            markets = api_call("CoinGecko", "coins_markets", lambda: coingecko.coins_markets("bitcoin,ethereum,solana,chainlink"))
-            fallback_news = pd.DataFrame(
-                [
-                    {
-                        "source": "coingecko-fallback",
-                        "title": f"{item.get('name')} market snapshot",
-                        "summary": f"Price {item.get('current_price')} | 24H {item.get('price_change_percentage_24h')}",
-                        "link": item.get("id", ""),
-                    }
-                    for item in markets
-                ]
-            )
-            return {"news": fallback_news, "macro": {}}
-        except Exception:
-            return {"news": pd.DataFrame(), "macro": {}}
+        return {"news": pd.DataFrame(), "macro": {}}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_symbol_news(symbol: str) -> pd.DataFrame:
+    currency = symbol.replace("USDC", "").replace("v", "", 1).replace("_", "").replace("ssi", "").replace("WSOSO", "SOSO")
+    currency = "BTC" if currency.startswith("BTC") else "ETH" if currency.startswith("ETH") else "SOL" if currency.startswith("SOL") else "LINK" if currency.startswith("LINK") else "SOSO" if "SOSO" in currency else "ARB" if currency.startswith("ARB") else "AVAX" if currency.startswith("AVAX") else "SHIB" if currency.startswith("SHIB") else "PEPE" if currency.startswith("PEPE") else "HYPE" if currency.startswith("HYPE") else currency
+    try:
+        payload = api_call("SoSoValue", f"news_featured_currency:{currency}", lambda: soso.news_featured_currency(currency, page_num=1, page_size=6))
+        return summarize_news(payload, {})
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=240, show_spinner=False)
+def load_leaderboard_consensus() -> pd.DataFrame:
+    leaderboard = api_call("SoDEX", "leaderboard:30d", lambda: sodex.leaderboard(window_type="30d", sort_by="volume", sort_order="desc", page=1, page_size=50))
+    items = leaderboard.get("items") if isinstance(leaderboard, dict) else []
+    items = [item for item in items or [] if float(item.get("pnl_usd", 0) or 0) > 0][:20]
+    wallets = [str(item.get("wallet_address") or "").strip() for item in items if item.get("wallet_address")]
+    positions_by_wallet: dict[str, Any] = {}
+    if wallets:
+        with ThreadPoolExecutor(max_workers=min(8, len(wallets))) as pool:
+            futures = {pool.submit(lambda w=wallet: api_call("SoDEX", f"perps_positions:{w[:8]}", lambda: sodex.perps_positions(w))): wallet for wallet in wallets}
+            for future, wallet in futures.items():
+                try:
+                    positions_by_wallet[wallet] = future.result()
+                except Exception:
+                    positions_by_wallet[wallet] = {}
+    return build_leaderboard_consensus(leaderboard, positions_by_wallet, n_top=20)
 
 
 def log_and_store(module: str, symbol: str, summary: str, payload: dict[str, object]) -> None:
@@ -193,10 +214,10 @@ def hero() -> None:
           <div>
             <span class="pill">SoSoValue research</span>
             <span class="pill">SoDEX execution</span>
-            <span class="pill">Replay + smart money + LP guard</span>
+            <span class="pill">Real market, real depth, real payload prep</span>
           </div>
-          <h1>GOKU Alpha Builder</h1>
-          <p>A brand-new buildathon tool rebuilt from scratch around the strongest ideas from prediction-market builders: dataset discipline, replay validation, wallet replication, LP quote protection, and execution-ready drafts.</p>
+          <h1>GOKU SoDEX Operator</h1>
+          <p>Live operator desk for SoDEX spot execution with SoSoValue research context, smart-money consensus, depth inspection, and signed order preparation.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -277,6 +298,7 @@ def render_overview(rows: list) -> None:
 
 def render_strategy_rack(rows: list) -> None:
     st.subheader("Strategy Rack")
+    st.caption("Live SoDEX rows are ranked into operator-ready drafts. No mock markets are used here.")
     repo_notes = score_repos_summary()
     data = pd.DataFrame([row.__dict__ for row in rows])
     if data.empty:
@@ -319,7 +341,7 @@ def render_replay_lab(rows: list) -> None:
     interval = st.selectbox("Interval", ["15m", "1h", "4h"], index=1)
     frame = load_klines(selected, interval)
     if frame.empty:
-        st.warning("No kline data returned for replay.")
+        st.warning("No live SoDEX kline data returned for replay.")
         return
     strategy = st.selectbox("Replay mode", ["Trend", "Mean Reversion", "Vol Breakout"])
     metrics = replay_strategy(frame, strategy)
@@ -340,6 +362,14 @@ def render_replay_lab(rows: list) -> None:
 
 def render_smart_money(rows: list) -> None:
     st.subheader("Smart Money Mirror")
+    leaderboard_consensus = load_leaderboard_consensus()
+    if not leaderboard_consensus.empty:
+        st.markdown("**Qualified top-trader consensus**")
+        st.dataframe(
+            leaderboard_consensus[["symbol", "bias", "dominance_ratio", "long_traders", "short_traders", "long_notional", "short_notional"]].head(12),
+            use_container_width=True,
+            hide_index=True,
+        )
     current = storage.list_peer_wallets()
     peer_input = st.text_area("Peer wallets", value="\n".join(current), placeholder="One 0x wallet per line")
     if st.button("Save peer set"):
@@ -348,7 +378,7 @@ def render_smart_money(rows: list) -> None:
         st.success(f"Saved {len(wallets)} peer wallets")
         current = wallets
     if not current:
-        st.info("Add peer wallets to unlock consensus and replication scoring.")
+        st.info("Add peer wallets to unlock replication scoring. Global smart-money consensus is already loaded from the SoDEX leaderboard above.")
         return
     trades_by_wallet: dict[str, list[dict[str, object]]] = {}
     for wallet in current[:8]:
@@ -425,6 +455,36 @@ def render_execution_copilot(rows: list) -> None:
     account_id = config.sodex_account_id or st.text_input("SoDEX account ID", value=config.sodex_account_id)
     quantity = round(notional / max(float(row["price"]), 1.0), 6)
     st.write({"venue_symbol": symbol, "symbol_id": symbol_id, "quantity": quantity, "price": row["price"]})
+    leaderboard_consensus = load_leaderboard_consensus()
+    consensus_row = None
+    if not leaderboard_consensus.empty:
+        target = {
+            "BTC": "vBTC_vUSDC",
+            "ETH": "vETH_vUSDC",
+            "SOL": "vSOL_vUSDC",
+            "LINK": "vLINK_vUSDC",
+            "SOSO": "WSOSO_vUSDC",
+            "MAGI7": "vMAG7ssi_vUSDC",
+            "USSI": "vUSSI_vUSDC",
+            "ARB": "vARB_vUSDC",
+            "PEPE": "vPEPE_vUSDC",
+            "AVAX": "vAVAX_vUSDC",
+            "SHIB": "vSHIB_vUSDC",
+            "HYPE": "vHYPE_vUSDC",
+        }.get(row["symbol"])
+        if target:
+            matched = leaderboard_consensus[leaderboard_consensus["symbol"] == target]
+            if not matched.empty:
+                consensus_row = matched.iloc[0].to_dict()
+    verdict = trade_check_verdict(type("RowObj", (), row.to_dict())(), side, consensus_row)
+    verdict_col1, verdict_col2, verdict_col3 = st.columns(3)
+    verdict_col1.metric("Trade Check", verdict["verdict"])
+    verdict_col2.metric("Momentum bias", verdict["momentum_bias"])
+    verdict_col3.metric("Smart money", verdict["consensus_label"])
+    symbol_news = load_symbol_news(symbol)
+    if not symbol_news.empty:
+        st.markdown("**Live SoSoValue research for this symbol**")
+        st.dataframe(symbol_news[["title", "summary", "link"]].head(4), use_container_width=True, hide_index=True)
     fee_rate = None
     if config.sodex_wallet_address and account_id:
         try:
@@ -522,13 +582,13 @@ def render_execution_copilot(rows: list) -> None:
 
 
 def render_news_agent(rows: list) -> None:
-    st.subheader("News-to-Draft Agent")
+    st.subheader("News Intelligence")
     bundle = load_news_bundle()
     news = bundle["news"]
     if isinstance(news, pd.DataFrame) and not news.empty:
         st.dataframe(news.head(8), use_container_width=True, hide_index=True)
     else:
-        st.info("News feed unavailable or API key missing.")
+        st.info("Live SoSoValue news feed unavailable right now.")
     if groq.enabled and isinstance(news, pd.DataFrame) and not news.empty:
         if st.button("Summarize news into action plan"):
             try:
@@ -557,6 +617,7 @@ def render_portfolio() -> None:
 
 def render_audit() -> None:
     st.subheader("Audit Trail")
+    st.caption("Every draft and decision below was produced from live market, research, or execution workflows in this session.")
     st.write("Recent drafts")
     st.dataframe(pd.DataFrame(storage.list_drafts(20)), use_container_width=True, hide_index=True)
     st.write("Recent decisions")

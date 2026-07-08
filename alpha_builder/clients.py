@@ -121,11 +121,14 @@ class SoSoValueClient:
     def currency_klines(self, currency_id: str, interval: str = "1d", limit: int = 90) -> Any:
         return self.get(f"/currencies/{currency_id}/klines", {"interval": interval, "limit": limit})
 
-    def news_hot(self) -> Any:
-        return self.get("/news/hot")
+    def news_hot(self, page: int = 1, page_size: int = 20) -> Any:
+        return self.get("/news/hot", {"page": page, "page_size": page_size})
 
-    def news_featured(self) -> Any:
-        return self.get("/news/featured")
+    def news_featured(self, page_num: int = 1, page_size: int = 10) -> Any:
+        return self.get("/news/featured", {"pageNum": page_num, "pageSize": page_size})
+
+    def news_featured_currency(self, currency: str, page_num: int = 1, page_size: int = 10) -> Any:
+        return self.get("/news/featured/currency", {"currency": currency, "pageNum": page_num, "pageSize": page_size})
 
     def macro_events(self, date: str | None = None) -> Any:
         return self.get("/macro/events", {"date": date} if date else None)
@@ -322,6 +325,40 @@ class SoDexClient:
     def spot_api_keys(self, user_address: str, account_id: str | None = None) -> Any:
         params = {"accountID": account_id or self.account_id} if (account_id or self.account_id) else None
         return self._get(self.spot_base_url, f"/accounts/{user_address}/api-keys", params)
+
+    def perps_positions(self, user_address: str, account_id: str | None = None) -> Any:
+        params = {"accountID": account_id or self.account_id} if (account_id or self.account_id) else None
+        return self._get(self.perps_base_url, f"/accounts/{user_address}/positions", params)
+
+    def perps_orderbook(self, symbol: str, limit: int = 20) -> Any:
+        return self._get(self.perps_base_url, f"/markets/{symbol}/orderbook", {"limit": limit})
+
+    def leaderboard(
+        self,
+        window_type: str = "30d",
+        sort_by: str = "volume",
+        sort_order: str = "desc",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> Any:
+        response = self.session.get(
+            "https://mainnet-data.sodex.dev/api/v1/leaderboard",
+            params={
+                "window_type": window_type,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+                "page": page,
+                "page_size": page_size,
+            },
+            headers={"Accept": "application/json"},
+            timeout=self.timeout,
+        )
+        if not response.ok:
+            raise ApiError(f"SoDEX leaderboard {response.status_code}: {response.text[:300]}")
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("code") not in (None, 0):
+            raise ApiError(f"SoDEX leaderboard {payload.get('code')}: {payload.get('error', 'unknown')}")
+        return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
 
     def build_spot_limit_order(
         self,

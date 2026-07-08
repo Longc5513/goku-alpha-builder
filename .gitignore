@@ -12,3 +12,4 @@ build/
 .vercel/
 node_modules/
 coverage/
+temp_*/
